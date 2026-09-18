@@ -2,6 +2,8 @@ package com.example.mwsparser;
 
 import javafx.application.Application;
 import java.io.*;
+
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.nio.file.Files;
@@ -69,14 +71,21 @@ class CCContent {
 class CCBlock extends CCContent {
     public String tier, counterpart, tags;
     public Boolean flawless;
-    public List<CCGeneration> object = new ArrayList<>();
+    public List<CCGeneration> generation = new ArrayList<>();
 
     public CCBlock(JSONObject data) {
         super(data);
         tier = data.optString("Tier");
         flawless = !Objects.equals(data.optString("OriginalVariant"), "");
         counterpart = data.optString("Flawless", data.optString("OriginalVariant"));
-        // TODO - go through the JSONArray Generation, creating a new CCGeneration object for every entry
+        JSONArray generation = data.optJSONArray("Generation");
+        if (generation != null) {
+            for (int i = 0 ; i < generation.length(); i++) {
+                JSONObject obj = generation.getJSONObject(i);
+                CCGeneration entry = new CCGeneration(obj, this.id, i);
+                this.generation.add(entry);
+            }
+        }
     }
 }
 
@@ -84,8 +93,16 @@ class CCGeneration {
     public String id, zone, biome;
     public int genId, chance, flawlessChance, minDepth, maxDepth;
 
-    public CCGeneration(JSONObject data) {
-        // TODO
+    public CCGeneration(JSONObject data, String id, int i) {
+        this.id = id;
+        genId = i;
+        zone = data.optString("Zone");
+        biome = data.optString("Biome");
+        chance = data.optInt("Chance");
+        flawlessChance = data.optInt("FlawlessChance");
+        minDepth = data.optInt("MinDepth");
+        maxDepth = data.optInt("MaxDepth");
+        System.out.print("eek");
     }
 }
 
@@ -189,7 +206,7 @@ public class Launcher {
             for (Map.Entry<String,Object> mapElement : map.entrySet()) {
                 String key = mapElement.getKey();
                 JSONObject data = json.getJSONObject(key);
-                //CCContent obj = entryType(data);
+                CCContent obj = entryType(data);
             }
             DatabaseConnection.Close();
         }
