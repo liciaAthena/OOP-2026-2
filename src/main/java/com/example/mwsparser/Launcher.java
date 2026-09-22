@@ -20,7 +20,7 @@ class CCContent {
     // Legal characters regex - see https://www.mediawiki.org/wiki/Manual:$wgLegalTitleChars
     private static final Pattern blacklist = Pattern.compile("^.*(\\[|\\]|\\{|\\}|\\||#|<|>).*$/gim");
 
-    public String id, type, name, wikiname, color, gradient, description, flavorText, dateAdded, credits, feature;
+    public String id, type, name, wikiname, color, gradient, description, flavorText, dateAdded, credits, feature, oldwikiname;
     public Boolean published;
 
     public CCContent(JSONObject data) {
@@ -41,6 +41,7 @@ class CCContent {
         feature = (data.optBoolean("DeveloperExclusive") ? "DoNotPublish" : data.optString("Feature"));
 
         published = false;
+        oldwikiname = "";
     }
 
     public void checkDatabase() {
@@ -86,8 +87,7 @@ class CCContent {
             ps.setString(7, flavorText);
             ps.setString(8, feature);
             ResultSet resultSet = ps.executeQuery();
-            boolean bool = resultSet.next();
-            return bool;
+            return resultSet.next();
         }
         catch (SQLException e) {
             throw new RuntimeException(e);
@@ -120,7 +120,31 @@ class CCContent {
 
     public void updateDatabase() {
         try {
-            String sql = "UPDATE ccContent SET type = ?, name = ?, wikiname = ?, color = ?, gradient = ?, description = ?, flavorText = ?, dateAdded = ?, credits = ?, feature = ?, published = ? WHERE id = ?";
+            String sqlq = "SELECT name, wikiname, published, oldwikiname FROM ccContent WHERE id = ?";
+            PreparedStatement psq = DatabaseConnection.connection.prepareStatement(sqlq);
+            psq.setString(1, id);
+            ResultSet resultSet = psq.executeQuery();
+            resultSet.next();
+            String dbname = resultSet.getString("name"); //Spinner
+            String dbwikiname = resultSet.getString("wikiname"); //blank
+            boolean dbpublished = resultSet.getBoolean("published"); //false
+            String dboldwikiname = resultSet.getString("oldwikiname"); //blank
+            if (!Objects.equals(dbname, name)) {
+                // content has been renamed since last added to the database
+                System.out.println("renamed content " + dbwikiname);
+                if (dbpublished) {
+                    // need to move the page from oldwikiname to new wikiname/name next publish
+                    oldwikiname = !Objects.equals(dbwikiname, "") ? dbwikiname : dbname;
+                } else {
+                    // page still hasn't been moved since last rename, preserve old wiki name
+                    oldwikiname = dboldwikiname;
+                }
+                Matcher m = blacklist.matcher(name);
+                wikiname = (m.matches()) ? "PROBLEMNAME" : "";
+                // TODO - handle moving pages for renamed content
+            }
+
+            String sql = "UPDATE ccContent SET type = ?, name = ?, wikiname = ?, color = ?, gradient = ?, description = ?, flavorText = ?, dateAdded = ?, credits = ?, feature = ?, published = ?, oldwikiname = ? WHERE id = ?";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, type);
             ps.setString(2, name);
@@ -133,8 +157,10 @@ class CCContent {
             ps.setString(9, credits);
             ps.setString(10, feature);
             ps.setBoolean(11, false);
-            ps.setString(12, id);
+            ps.setString(12, oldwikiname);
+            ps.setString(13, id);
             ps.executeUpdate();
+            oldwikiname = "";
         }
 
         catch (SQLException e) {
@@ -176,7 +202,7 @@ class CCBlock extends CCContent {
             tagsArray.forEach(item -> {
                 String key = item.toString();
                 String description = tagDescriptions != null ? tagDescriptions.optString(key, null) : null;
-                tags.put(key, description);
+                tags.put(key, description == null ? JSONObject.NULL : description);
             });
         }
 
@@ -196,7 +222,7 @@ class CCBlock extends CCContent {
 
         try {
             // comparing amount of generation objects to amount of generation data in database
-            String sql = "SELECT MAX(genEntryId) AS MAXID FROM generationData WHERE id = ?";
+            String sql = "SELECT MAX(genId) AS MAXID FROM generationData WHERE id = ?";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, id);
             ResultSet resultSet = ps.executeQuery();
@@ -207,7 +233,7 @@ class CCBlock extends CCContent {
                 if (genMax < genMaxDb) {
                     // generation entries have been removed and need to be deleted off the database
                     for (int i = genMax+1 ; i <= genMaxDb; i++) {
-                        // remove from db where id = id genentryid = i
+                        // remove from db where id = id genId = i
                         System.out.println("Removed id " + id + "gentry id " + i);
                         CCGeneration.removeDatabase(id, i);
                     }
@@ -242,25 +268,11 @@ class CCBlock extends CCContent {
             ResultSet resultSet2 = ps2.executeQuery();
             if (resultSet2.next()) {
                 String dbtags = resultSet2.getString("tags");
-                System.out.println("db tags " + dbtags);
                 JSONObject tagsDB = new JSONObject(dbtags);
                 tagsequal = tagsDB.similar(tags);
             }
 
             return (resultSet.next() && base && tagsequal);
-        }
-        catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public boolean inDatabase() {
-        try {
-            String sql = "SELECT id FROM blockData WHERE id = ?";
-            PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
-            ps.setString(1, id);
-            ResultSet resultSet = ps.executeQuery();
-            return resultSet.next();
         }
         catch (SQLException e) {
             throw new RuntimeException(e);
@@ -341,7 +353,7 @@ class CCGeneration {
     public boolean inDatabase() {
         try {
             System.out.println("inDatabase");
-            String sql = "SELECT id FROM generationData WHERE id = ? AND genEntryId = ?";
+            String sql = "SELECT id FROM generationData WHERE id = ? AND genId = ?";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, id);
             ps.setInt(2, genId);
@@ -356,7 +368,7 @@ class CCGeneration {
     public boolean databaseEqual() {
         try {
             System.out.println("databaseEqual");
-            String sql = "SELECT * FROM blockData WHERE id = ? AND genId = ? AND zone = ? AND biome = ? AND chance ? AND flawlessChance = ? and minDepth = ? and maxDepth = ?";
+            String sql = "SELECT * FROM generationData WHERE id = ? AND genId = ? AND zone = ? AND biome = ? AND chance = ? AND flawlessChance = ? and minDepth = ? and maxDepth = ?";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, id);
             ps.setInt(2, genId);
@@ -377,7 +389,7 @@ class CCGeneration {
 
     public void addDatabase() {
         try {
-            String sql = "INSERT INTO generationData (id, genEntryId, zone, biome, chance, flawlessChance, minDepth, maxDepth) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
+            String sql = "INSERT INTO generationData (id, genId, zone, biome, chance, flawlessChance, minDepth, maxDepth) VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, id);
             ps.setInt(2, genId);
@@ -398,7 +410,7 @@ class CCGeneration {
     public void updateDatabase() {
         //setPublished(false);
         try {
-            String sql = "UPDATE generationData SET zone = ?, biome = ?, chance = ?, flawlessChance = ?, minDepth = ?, maxDepth = ? WHERE id = ? AND genEntryId = ?";
+            String sql = "UPDATE generationData SET zone = ?, biome = ?, chance = ?, flawlessChance = ?, minDepth = ?, maxDepth = ? WHERE id = ? AND genId = ?";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, zone);
             ps.setString(2, biome);
@@ -418,7 +430,7 @@ class CCGeneration {
 
     public static void removeDatabase(String id, int genId) {
         try {
-            String sql = "DELETE FROM generationData WHERE id = ? AND genEntryId = ?";
+            String sql = "DELETE FROM generationData WHERE id = ? AND genId = ?";
             PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
             ps.setString(1, id);
             ps.setInt(2, genId);
@@ -431,13 +443,79 @@ class CCGeneration {
 }
 
 class CCEquipment extends CCContent {
-    public String tier, component, stats;
+    public String tier, component;
+    public JSONObject stats;
 
     public CCEquipment(JSONObject data) {
         super(data);
         tier = data.optString("Tier");
         component = data.optString("Component");
-        // TODO - stats
+        stats = data.optJSONObject("Stats", new JSONObject("{}"));
+    }
+
+    public boolean databaseEqual() {
+        try {
+            //base data equivalence
+            boolean base = super.databaseEqual();
+            //equipment data equivalence
+            String sql = "SELECT * FROM equipmentData WHERE id = ? AND tier = ? AND component = ?";
+            PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
+            ps.setString(1, this.id);
+            ps.setString(2, this.tier);
+            ps.setString(3, this.component);
+            ResultSet resultSet = ps.executeQuery();
+            //stats need to be checked separately since the order of the keys might not be equivalent
+            boolean statsequal = true;
+            sql = "SELECT stats FROM equipmentData WHERE id = ? AND stats IS NOT NULL";
+            PreparedStatement ps2 = DatabaseConnection.connection.prepareStatement(sql);
+            ps2.setString(1, id);
+            ResultSet resultSet2 = ps2.executeQuery();
+            if (resultSet2.next()) {
+                String dbstats = resultSet2.getString("stats");
+                JSONObject tagsDB = new JSONObject(dbstats);
+                statsequal = tagsDB.similar(stats);
+            }
+            System.out.println("equip dbequal - base " + base + "statsequal " + statsequal);
+            return (resultSet.next() && base && statsequal);
+        }
+        catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void addDatabase() {
+        if (!contentInDatabase()) {
+            super.addDatabase();
+        }
+        try {
+            String sql = "INSERT INTO equipmentData (id, tier, component, stats) VALUES (?, ?, ?, ?)";
+            PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
+            ps.setString(1, id);
+            ps.setString(2, tier);
+            ps.setString(3, component);
+            ps.setString(4, stats.toString());
+            ps.executeUpdate();
+        }
+        catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    public void updateDatabase() {
+        super.updateDatabase();
+        try {
+            String sql = "UPDATE equipmentData SET tier = ?, component = ?, stats = ? WHERE id = ?";
+            PreparedStatement ps = DatabaseConnection.connection.prepareStatement(sql);
+            ps.setString(1, tier);
+            ps.setString(2, component);
+            ps.setString(3, stats.toString());
+            ps.setString(4, id);
+            ps.executeUpdate();
+        }
+
+        catch (SQLException e) {
+            throw new RuntimeException(e);
+        }
     }
 }
 
@@ -486,66 +564,12 @@ class DatabaseConnection {
             throw new RuntimeException(e);
         }
     }
-
-    /*public static boolean contentInDatabase(this) {
-        try {
-            System.out.println("inDatabase CCContent");
-            String sql = "SELECT id FROM ccContent WHERE id = ?";
-            PreparedStatement ps = connection.prepareStatement(sql);
-            ps.setString(1, content.id);
-            ResultSet resultSet = ps.executeQuery();
-            return resultSet.next();
-        }
-        catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-    }*/
-
-    /*public static boolean inDatabase(CCBlock content) {
-        try {
-            System.out.println("inDatabase CCBlock");
-            String sql = "SELECT id FROM blockData WHERE id = ?";
-            PreparedStatement ps = connection.prepareStatement(sql);
-            ps.setString(1, content.id);
-            ResultSet resultSet = ps.executeQuery();
-            return resultSet.next();
-        }
-        catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-    }
-
-    public static boolean inDatabase(String id, int entryId) {
-        try {
-            String sql = "SELECT id FROM generationData WHERE id = ? AND genEntryId = ?";
-            PreparedStatement ps = connection.prepareStatement(sql);
-            ps.setString(1, id);
-            ps.setInt(2, entryId);
-            ResultSet resultSet = ps.executeQuery();
-            return resultSet.next();
-        }
-        catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-    }*/
-
-    public static void insertPS(String sql) {
-        try {
-            DatabaseConnection.statement.executeUpdate(sql);
-        }
-        catch (SQLException e) {
-            throw new RuntimeException(e);
-        }
-
-    }
 }
 
 public class Launcher {
     public static void main(String[] args) {
         //Application.launch(HelloApplication.class, args);
-
-        //TODO - temp console application
-        //DatabaseConnection.Connect();
+        //TODO - GUI will be done in later half of the project. temp console application below
         BufferedReader r = new BufferedReader(new InputStreamReader(System.in));
         System.out.println("MWParser\n" +
                 "1-Parse JSON\n" +
@@ -556,6 +580,9 @@ public class Launcher {
             switch (s) {
                 case "1":
                     parseJson();
+                    break;
+                case "3":
+                    publishMira();
                     break;
                 default:
                     break;
